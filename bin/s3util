@@ -3,11 +3,55 @@
 from __future__ import print_function
 
 from argparse import ArgumentParser
+from copy import copy
 
 import boto
 import sys
 import os
 import time
+
+class DirPolicy:
+    def __init__(self, bucket='', root='', prefix='', use_relpath=True, 
+            flatten=False, overwrite='overwrite', **kwargs):
+        self.bucket = bucket
+        self.root = root
+        self.prefix = prefix
+        self.use_relpath = use_relpath
+        self.flatten = flatten
+        self.overwrite = overwrite
+
+        self.absroot = os.path.abspath(root)
+
+    def __contains__(self, fname):
+        return os.path.abspath(fname).startswith(self.absroot)
+
+    def __lt__(self, rhs):
+        return len(self.absroot) > len(rhs.absroot)
+
+    def __cmp__(self, rhs):
+        """Sort, in descending order, the depth of path (level of folders)."""
+        return -cmp(len(self.absroot), len(rhs.absroot))
+
+    def __repr__(self):
+        return "<DirPolicy '{0}'>".format(self.absroot)
+
+    def s3_key(self, fname):
+        abspath = os.path.abspath(fname)
+        relpath = os.path.relpath(abspath, self.absroot)
+
+        s3_path = relpath if self.use_relpath else fname
+        s3_key = os.path.join(self.prefix, s3_path)
+
+        if self.flatten:
+            s3_path = os.path.basename(s3_path)
+
+        return {
+                'abspath': abspath, 
+                'relpath': relpath,
+                'bucket': self.bucket,
+                'overwrite': self.overwrite,
+                'key': s3_key
+                }
 
 def parse_args(argv=None):
     parser = ArgumentParser(
@@ -24,7 +68,7 @@ def parse_args(argv=None):
 
     sp_put.add_argument("-b", "--bucket", 
             help="Bucket to which the file is uploaded.")
-    sp_put.add_argument("-d", "--dir", default='',
+    sp_put.add_argument("-p", "--prefix", default='',
             help="Directory (in the bucket) to which the file is uploaded.")
     sp_put.add_argument("-o", "--overwrite", 
             choices=["overwrite", "suffix", "versioning"],
@@ -32,7 +76,7 @@ def parse_args(argv=None):
             help="How to deal with existing file(s).")
     sp_put.add_argument("--flatten", action="store_true", default=False,
             help="Discard the subdirectory structures for local files.")
-    sp_put.add_argument("file", nargs="+", 
+    sp_put.add_argument("files", nargs="+", metavar="file",
             help="File(s) to be uploaded to S3.")
 
     sp_put.set_defaults(action=cmd_put)
@@ -79,6 +123,7 @@ def load_config_file(conf_file):
             print(err_msg, file=sys.stderr)
             sys.exit(1)
 
+        conf.setdefault('directories', [])
         return conf
 
 def humanize_size(nbytes):
@@ -116,8 +161,65 @@ def upload_cb_factory(filename):
 
     return cb
 
+def generate_s3_key(files, conf):
+    if type(files) is str:
+        files = [files]
+
+    dir_policies = [DirPolicy(root='/', **conf['default'])]
+    for d in conf['directories']:
+        if 'root' in d:
+            pol = copy(conf['default'])
+            pol.update(d)
+
+            dir_policies.append(DirPolicy(**pol))
+
+
+    for f in files:
+        # choose the most pertinent/narrow policy, if multiple policies are
+        # associated with the file.
+        # the 'default' policy should always apply
+        policy = sorted([dirp for dirp in dir_policies if f in dirp])[0]
+
+        yield policy.s3_key(f)
+
+def put_file(conn, abspath=None, key=None, bucket=None, overwrite='overwrite', 
+        **options):
+    try:
+        bkt = conn.get_bucket(bucket)
+    except boto.exception.S3ResponseError as e:
+        print("fatal: unable to access bucket '{0}'.\n\n{1}".format(
+            bucket, e), file=sys.stderr)
+        sys.exit(1)
+
+    exists = True
+    s3_key = bkt.get_key(key)
+
+    if s3_key is None:
+        exists = False
+        s3_key = boto.s3.key.Key(bkt)
+        s3_key.key = key
+
+    progress_cb = upload_cb_factory(abspath)
+
+    sys.stdout.write(
+            "Uploading: '{0}'\nDestination: '{1}/{2}'\n".format(
+                abspath, bucket, key))
+
+    if not exists or overwrite == 'overwrite':
+        s3_key.set_contents_from_filename(abspath,
+                replace=True, cb=progress_cb, num_cb=100)
+
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
 def cmd_put(args):
     conf = load_config_file(args.config)
+
+    # overwrite default settings with arguments specified by the user.
+    conf['default'].update(dict(
+        (attr, getattr(args, attr))
+        for attr in ['overwrite', 'prefix', 'bucket', 'flatten']
+        if hasattr(args, attr) and getattr(args, attr)))
 
     if not 'aws_credentials' in conf:
         raise ValueError(
@@ -150,40 +252,9 @@ def cmd_put(args):
             print("fatal: bucket id is missing.", file=sys.stderr)
             sys.exit(1)
 
-    try:
-        bucket = conn.get_bucket(args.bucket)
-    except boto.exception.S3ResponseError as e:
-        print("fatal: unable to access bucket '{0}'.\n\n{1}".format(
-            args.bucket, e), file=sys.stderr)
-        sys.exit(1)
 
-    for f in args.file:
-        cwd = os.getcwd()
-        f_abspath = os.path.abspath(f)
-        ups_key = os.path.join(args.dir,
-                os.path.relpath(f_abspath, cwd) if not args.flatten \
-                        else os.path.basename(f_abspath))
-
-        exists = True
-        key = bucket.get_key(ups_key)
-
-        if key is None:
-            exists = False
-            key = boto.s3.key.Key(bucket)
-            key.key = ups_key
-
-        _f_callback = upload_cb_factory(f_abspath)
-
-        sys.stdout.write(
-            "Uploading: '{0}'\nDestination: '{1}/{2}'\n".format(
-                f, args.bucket, ups_key))
-
-        if not exists or args.overwrite == 'overwrite':
-            key.set_contents_from_filename(f_abspath,
-                    replace=True, cb=_f_callback, num_cb=100)
-
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+    for f in generate_s3_key(args.files, conf):
+        put_file(conn, **f)
 
     conn.close()
 

@@ -1,0 +1,198 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+from argparse import ArgumentParser
+
+import boto
+import sys
+import os
+import time
+
+def parse_args(argv=None):
+    parser = ArgumentParser(
+            description="Amazon S3 Utilities.")
+    parser.add_argument("-c", "--config", default="~/.s3util/config.yaml",
+            help="Specify the configuration file.")
+
+    sub_parsers = parser.add_subparsers(
+            title="available commands", 
+            metavar="{command}")
+
+    sp_put = sub_parsers.add_parser("put", 
+            help="Upload a local file to a S3 bucket.")
+
+    sp_put.add_argument("-b", "--bucket", 
+            help="Bucket to which the file is uploaded.")
+    sp_put.add_argument("-d", "--dir", default='',
+            help="Directory (in the bucket) to which the file is uploaded.")
+    sp_put.add_argument("-o", "--overwrite", 
+            choices=["overwrite", "suffix", "versioning"],
+            default="overwrite",
+            help="How to deal with existing file(s).")
+    sp_put.add_argument("--flatten", action="store_true", default=False,
+            help="Discard the subdirectory structures for local files.")
+    sp_put.add_argument("file", nargs="+", 
+            help="File(s) to be uploaded to S3.")
+
+    sp_put.set_defaults(action=cmd_put)
+
+    sp_config = sub_parsers.add_parser("config",
+            help="Configure s3util.")
+
+    if (argv is None and len(sys.argv) == 1) \
+            or (type(argv) in (list, tuple) and len(argv) == 0):
+        parser.print_help()
+        parser.exit()
+
+    args = parser.parse_args(argv)
+
+    return args
+
+def load_config_file(conf_file):
+    import yaml
+
+    if conf_file.find('~') != -1:
+        conf_file = os.path.expanduser(conf_file)
+
+    if not os.path.exists(conf_file):
+        print("fatal: configuration file {0} does not exist.".format(
+            conf_file), file=sys.stderr)
+
+        sys.exit(1)
+
+    st_mode = os.stat(conf_file).st_mode
+    # check if any of the lower 7 bits are set. if so, warn the user and abort
+    if st_mode & 0x7f:
+        print(("warning: you should set the mode of {0} to "
+            "0600 or 0400 to protect your credentials.").format(conf_file), 
+            file=sys.stderr)
+        sys.exit(1)
+
+    with open(conf_file) as f:
+        try:
+            conf = yaml.load(f)
+        except yaml.scanner.ScannerError as e:
+            err_msg = ("fatal: corrupted configuration file {0}.\n\n"
+                    "{1}").format(conf_file, e)
+
+            print(err_msg, file=sys.stderr)
+            sys.exit(1)
+
+        return conf
+
+def humanize_size(nbytes):
+    unit = 'B'
+    multiplier = nbytes
+
+    if nbytes >= 1024 and nbytes < 1024*1024:
+        unit = 'KB'
+        multiplier = round(float(nbytes) / 1024, 1)
+    elif nbytes >= 1024*1024 and nbytes < 1024**3:
+        unit = 'MB'
+        multiplier = round(float(nbytes) / 1024**2, 1)
+    elif nbytes >= 1024**3:
+        unit = 'GB'
+        multiplier = round(float(nbytes) / 1024**3, 1)
+
+    return "{0}{1}".format(multiplier, unit)
+
+def upload_cb_factory(filename):
+    ts_start = time.time()
+    def cb(bytes_transmitted, bytes_total):
+        perc = int(round(float(bytes_transmitted) / bytes_total * 100))
+        progress = int(round(float(bytes_transmitted) / bytes_total * 20))
+
+        bps = float(bytes_transmitted) / (time.time() - ts_start)
+
+        pbar = "{0}{1}".format('=' * progress,
+                '>' if progress < 20 else '')
+
+        sys.stdout.write("\r  {0}% [{1}] {2}   {3}/s".format(
+            perc, pbar.ljust(20),
+            humanize_size(bytes_total), humanize_size(bps)))
+
+        sys.stdout.flush()
+
+    return cb
+
+def cmd_put(args):
+    conf = load_config_file(args.config)
+
+    if not 'aws_credentials' in conf:
+        raise ValueError(
+                "Invalid configuration file: `aws_credentials` missing.")
+
+    if conf['aws_credentials'].get('use_iam_role', False):
+        conn = boto.connect_s3()
+    else:
+        creds = conf['aws_credentials']
+        try:
+            conn = boto.connect_s3(
+                    aws_access_key_id=creds.get('access_key_id', ''),
+                    aws_secret_access_key=creds.get(
+                        'secret_access_key', ''))
+        except boto.exception.NoAuthHandlerFound:
+            err_msg = ("fatal: You have not set up your credentials for "
+                    " authentication.\n\n"
+                    "Please set up the credentials via command: \n"
+                    "   s3util config credentials")
+
+            print(err_msg, file=sys.stderr)
+
+            sys.exit(1)
+
+    if not args.bucket:
+        def_conf = conf.get('default', {})
+        args.bucket = def_conf.get('bucket', None)
+
+        if args.bucket is None:
+            print("fatal: bucket id is missing.", file=sys.stderr)
+            sys.exit(1)
+
+    try:
+        bucket = conn.get_bucket(args.bucket)
+    except boto.exception.S3ResponseError as e:
+        print("fatal: unable to access bucket '{0}'.\n\n{1}".format(
+            args.bucket, e), file=sys.stderr)
+        sys.exit(1)
+
+    for f in args.file:
+        cwd = os.getcwd()
+        f_abspath = os.path.abspath(f)
+        ups_key = os.path.join(args.dir,
+                os.path.relpath(f_abspath, cwd) if not args.flatten \
+                        else os.path.basename(f_abspath))
+
+        exists = True
+        key = bucket.get_key(ups_key)
+
+        if key is None:
+            exists = False
+            key = boto.s3.key.Key(bucket)
+            key.key = ups_key
+
+        _f_callback = upload_cb_factory(f_abspath)
+
+        sys.stdout.write(
+            "Uploading: '{0}'\nDestination: '{1}/{2}'\n".format(
+                f, args.bucket, ups_key))
+
+        if not exists or args.overwrite == 'overwrite':
+            key.set_contents_from_filename(f_abspath,
+                    replace=True, cb=_f_callback, num_cb=100)
+
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    conn.close()
+
+
+def main():
+    args = parse_args()
+
+    if args.action:
+        args.action(args)
+
+if __name__ == "__main__":
+    main()

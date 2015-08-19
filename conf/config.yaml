@@ -1,0 +1,33 @@
+# AWS user keys for API authorizations
+aws_credentials:
+    # if an IAM role is properly configured to grant full S3 access to EC2
+    # instances, you can set `use_iam_role` to `true`, and leave the key pairs
+    # blank
+    use_iam_role: false
+    access_key_id: 'your_key_id'
+    secret_access_key: 'your_secret_key'
+
+default:
+    bucket: ''
+
+    # "overwrite" or "suffix" or "versioning"
+    overwrite: 'overwrite' 
+    reduced_redundancy: false
+
+    ## Define transformations of files before uploading
+    hooks:
+        preupload:
+            - pattern: '*.fastq'
+              transform: 'gzip'
+            - pattern: '*.sam'
+              command: 'samtools -vmO b $0 > $1' 
+        # postdownload:
+        #
+transformations:
+    - name: 'sam2bam'
+      command: 'samtools -vmO b $0 > $1'
+
+directories:
+    - path: '/warehouse/PREMIER_PROJECT'
+      prefix: 'PREMIER_PROJECT'
+      use_relpath: true

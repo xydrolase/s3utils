@@ -5,10 +5,15 @@ from __future__ import print_function
 from argparse import ArgumentParser
 from copy import copy
 
-import boto
 import sys
 import os
 import time
+
+import boto
+
+import s3util.io
+
+OVERWRITE = dict(zip(['skip', 'replace', 'suffix', 'versioning'], range(4)))
 
 class DirPolicy:
     def __init__(self, bucket='', root='', prefix='', use_relpath=True, 
@@ -71,8 +76,8 @@ def parse_args(argv=None):
     sp_put.add_argument("-p", "--prefix", default='',
             help="Directory (in the bucket) to which the file is uploaded.")
     sp_put.add_argument("-o", "--overwrite", 
-            choices=["overwrite", "suffix", "versioning"],
-            default="overwrite",
+            choices=["skip", "replace", "suffix", "versioning"],
+            default="replace",
             help="How to deal with existing file(s).")
     sp_put.add_argument("--flatten", action="store_true", default=False,
             help="Discard the subdirectory structures for local files.")
@@ -90,6 +95,9 @@ def parse_args(argv=None):
         parser.exit()
 
     args = parser.parse_args(argv)
+
+    if hasattr(args, 'overwrite'):
+        args.overwrite = OVERWRITE.get(args.overwrite, 1)
 
     return args
 
@@ -126,41 +134,6 @@ def load_config_file(conf_file):
         conf.setdefault('directories', [])
         return conf
 
-def humanize_size(nbytes):
-    unit = 'B'
-    multiplier = nbytes
-
-    if nbytes >= 1024 and nbytes < 1024*1024:
-        unit = 'KB'
-        multiplier = round(float(nbytes) / 1024, 1)
-    elif nbytes >= 1024*1024 and nbytes < 1024**3:
-        unit = 'MB'
-        multiplier = round(float(nbytes) / 1024**2, 1)
-    elif nbytes >= 1024**3:
-        unit = 'GB'
-        multiplier = round(float(nbytes) / 1024**3, 1)
-
-    return "{0}{1}".format(multiplier, unit)
-
-def upload_cb_factory(filename):
-    ts_start = time.time()
-    def cb(bytes_transmitted, bytes_total):
-        perc = int(round(float(bytes_transmitted) / bytes_total * 100))
-        progress = int(round(float(bytes_transmitted) / bytes_total * 20))
-
-        bps = float(bytes_transmitted) / (time.time() - ts_start)
-
-        pbar = "{0}{1}".format('=' * progress,
-                '>' if progress < 20 else '')
-
-        sys.stdout.write("\r  {0}% [{1}] {2}   {3}/s".format(
-            perc, pbar.ljust(20),
-            humanize_size(bytes_total), humanize_size(bps)))
-
-        sys.stdout.flush()
-
-    return cb
-
 def generate_s3_key(files, conf):
     if type(files) is str:
         files = [files]
@@ -182,36 +155,6 @@ def generate_s3_key(files, conf):
 
         yield policy.s3_key(f)
 
-def put_file(conn, abspath=None, key=None, bucket=None, overwrite='overwrite', 
-        **options):
-    try:
-        bkt = conn.get_bucket(bucket)
-    except boto.exception.S3ResponseError as e:
-        print("fatal: unable to access bucket '{0}'.\n\n{1}".format(
-            bucket, e), file=sys.stderr)
-        sys.exit(1)
-
-    exists = True
-    s3_key = bkt.get_key(key)
-
-    if s3_key is None:
-        exists = False
-        s3_key = boto.s3.key.Key(bkt)
-        s3_key.key = key
-
-    progress_cb = upload_cb_factory(abspath)
-
-    sys.stdout.write(
-            "Uploading: '{0}'\nDestination: '{1}/{2}'\n".format(
-                abspath, bucket, key))
-
-    if not exists or overwrite == 'overwrite':
-        s3_key.set_contents_from_filename(abspath,
-                replace=True, cb=progress_cb, num_cb=100)
-
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-
 def cmd_put(args):
     conf = load_config_file(args.config)
 
@@ -230,10 +173,9 @@ def cmd_put(args):
     else:
         creds = conf['aws_credentials']
         try:
-            conn = boto.connect_s3(
-                    aws_access_key_id=creds.get('access_key_id', ''),
-                    aws_secret_access_key=creds.get(
-                        'secret_access_key', ''))
+            conn = s3util.io.Connection(
+                    access_key_id=creds.get('access_key_id', None),
+                    secret_access_key=creds.get('secret_access_key', None))
         except boto.exception.NoAuthHandlerFound:
             err_msg = ("fatal: You have not set up your credentials for "
                     " authentication.\n\n"
@@ -252,12 +194,10 @@ def cmd_put(args):
             print("fatal: bucket id is missing.", file=sys.stderr)
             sys.exit(1)
 
-
     for f in generate_s3_key(args.files, conf):
-        put_file(conn, **f)
+        conn.put(**f)
 
-    conn.close()
-
+    conn = None
 
 def main():
     args = parse_args()

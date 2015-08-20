@@ -1,34 +1,49 @@
 #!/usr/bin/env python
 
-class CompressionHook:
+from s3util.hooks.base import BaseHook
+
+class CompressionHook(BaseHook):
+    extension = None
+    command = None
+
     def __init__(self, keep=False, **kwargs):
-        self.extension = None
-        self.command = None
         self.keep = keep
 
-    def __call__(self, bucket, key, fname):
+        super(CompressionHook, self).__init__(**kwargs)
+
+    def dry_run(self, bucket, key, fname):
         if self.extension is None or self.command is None:
             raise NotImplementedError(
                     "CompressionHook is a generic hook template.")
+
+        return ("".join((key, self.extension)),
+                "".join((fname, self.extension)),
+                not self.keep)
+
+    def __call__(self, bucket, key, fname):
+        _retval = self.dry_run(bucket, key, fname)
 
         args = [self.command] + ['-k'] if self.keep else []
         args.append(fname)
 
         subprocess.check_call(args)
 
-        return ("{0}.{1}".format(key, self.extension),
-                "{0}.{1}".format(fname, self.extension),
-                not self.keep)
+        return _retval
+
 
 class GzipHook(CompressionHook):
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.extension = '.gz'
         self.command = 'gzip'
+
+        super(GzipHook, self).__init__(**kwargs)
 
 class Bzip2Hook(CompressionHook):
     def __init__(self):
         self.extension = '.bz2'
         self.command = 'bzip2'
+
+        super(Bzip2Hook, self).__init__(**kwargs)
 
 class TarExtractionHook:
     pass
@@ -51,7 +66,7 @@ class DecompressionHook:
         self.command = command
         self.keep = keep
 
-    def __call__(self, bucket, key, fname):
+    def dry_run(self, bucket, key, fname):
         if self.command is None:
             prefix, ext = os.path.splitext(fname)
             self.command = DecompressionHook.supported_commands.get(ext, None)
@@ -61,9 +76,14 @@ class DecompressionHook:
                         ("DecompressionHook cannot deduce the compressor for "
                             "file type '{0}'").format(ext))
 
-            args = [self.command] + ['-k'] if self.keep else []
-            args.append(fname)
+        return (key, prefix, not self.keep)
 
-            subprocess.check_call(args)
+    def __call__(self, bucket, key, fname):
+        _retval = self.dry_run(bucket, key, fname)
 
-            return (key, prefix, not self.keep)
+        args = [self.command] + ['-k'] if self.keep else []
+        args.append(fname)
+
+        subprocess.check_call(args)
+
+        return _retval 

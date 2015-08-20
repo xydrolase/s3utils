@@ -8,13 +8,13 @@ import boto
 from s3util.utils.ui import ProgressBar
 from s3util.hooks import load_hook, apply_hooks
 
+OVERWRITE_SKIP, OVERWRITE_REPLACE, OVERWRITE_SUFFIX, \
+    OVERWRITE_VERSION = range(4)
+
 class AuthenticationError(Exception):
     pass
 
 class Connection:
-    OVERWRITE_SKIP, OVERWRITE_REPLACE, OVERWRITE_SUFFIX, \
-            OVERWRITE_VERSION = range(4)
-     
     def __init__(self, access_key_id=None, secret_access_key=None):
         self._conn = boto.connect_s3(
                 aws_access_key_id=access_key_id,
@@ -25,7 +25,7 @@ class Connection:
         if type(abspath) not in (file, str):
             raise TypeError("invalid 'abspath' argument")
 
-        if overwrite >= Connection.OVERWRITE_VERSION:
+        if overwrite >= OVERWRITE_VERSION:
             raise ValueError(("invalid 'overwrite' argument: "
                     "local file does not support versioning."))
 
@@ -51,11 +51,11 @@ class Connection:
             os.mkdir(dirname)
 
         if os.path.exists(fname) and \
-                overwrite == self.OVERWRITE_SKIP:
+                overwrite == OVERWRITE_SKIP:
             return
 
         if not os.path.exists(fname) or \
-                overwrite == self.OVERWRITE_REPLACE:
+                overwrite == OVERWRITE_REPLACE:
             getattr(_key, func)(abspath)
 
         return apply_hooks(_bucket.name, _key.name, fname, post_hooks)
@@ -106,7 +106,7 @@ class Connection:
                 fname, bucket.name, key.name))
 
         _cb = ProgressBar(fname, stream)
-        if not key.exists() or overwrite == self.OVERWRITE_REPLACE:
+        if not key.exists() or overwrite == OVERWRITE_REPLACE:
             getattr(key, func)(abspath, replace=True, cb=_cb, num_cb=100)
 
         if stream:

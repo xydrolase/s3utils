@@ -2,6 +2,9 @@
 
 from s3util.hooks.base import BaseHook
 
+import os
+import subprocess
+
 class CompressionHook(BaseHook):
     extension = None
     command = None
@@ -23,7 +26,7 @@ class CompressionHook(BaseHook):
     def __call__(self, bucket, key, fname):
         _retval = self.dry_run(bucket, key, fname)
 
-        args = [self.command] + ['-k'] if self.keep else []
+        args = [self.command] + (['-k'] if self.keep else [])
         args.append(fname)
 
         subprocess.check_call(args)
@@ -69,7 +72,7 @@ class DecompressionHook:
     def dry_run(self, bucket, key, fname):
         if self.command is None:
             prefix, ext = os.path.splitext(fname)
-            self.command = DecompressionHook.supported_commands.get(ext, None)
+            self.command = self.supported_commands.get(ext, None)
 
             if self.command is None:
                 raise NotImplementedError(
@@ -81,7 +84,7 @@ class DecompressionHook:
     def __call__(self, bucket, key, fname):
         _retval = self.dry_run(bucket, key, fname)
 
-        args = [self.command] + ['-k'] if self.keep else []
+        args = [self.command] + (['-k'] if self.keep else [])
         args.append(fname)
 
         subprocess.check_call(args)

@@ -26,7 +26,9 @@ class CompressionHook(BaseHook):
     def __call__(self, bucket, key, fname):
         _retval = self.dry_run(bucket, key, fname)
 
-        args = [self.command] + (['-k'] if self.keep else [])
+        # use '-f' to force compression, unless gzip/bzip2 hangs waiting for
+        # user input.
+        args = [self.command, '-f'] + (['-k'] if self.keep else [])
         args.append(fname)
 
         subprocess.check_call(args)
@@ -51,7 +53,7 @@ class Bzip2Hook(CompressionHook):
 class TarExtractionHook:
     pass
 
-class DecompressionHook:
+class DecompressionHook(BaseHook):
     """Hook for decompressing downloaded files.
 
     Unlike CompressionHook, DecompressionHook can deduce the decompressor based
@@ -84,7 +86,7 @@ class DecompressionHook:
     def __call__(self, bucket, key, fname):
         _retval = self.dry_run(bucket, key, fname)
 
-        args = [self.command] + (['-k'] if self.keep else [])
+        args = [self.command, '-f'] + (['-k'] if self.keep else [])
         args.append(fname)
 
         subprocess.check_call(args)

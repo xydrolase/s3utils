@@ -102,13 +102,27 @@ class Connection:
         func = 'set_contents_from_filename' if type(abspath) is str else \
                 'set_contents_from_file'
 
+        _exists = key.exists()
+
         if stream:
             stream.write("Uploading: '{0}'\nDestination: '{1}/{2}'\n".format(
                 fname, bucket.name, key.name))
 
         _cb = ProgressBar(fname, stream)
-        if not key.exists() or overwrite == OVERWRITE_REPLACE:
+
+        if _exists and overwrite == OVERWRITE_SKIP:
+            if stream:
+                stream.write(
+                    "Key '{1}' exists in bucket '{0}', skipped.\n".format(
+                        bucket.name, key.name))
+            return
+        elif not _exists or overwrite == OVERWRITE_REPLACE:
             getattr(key, func)(abspath, replace=True, cb=_cb, num_cb=100)
+        else:
+            # TODO: needs implementation
+            raise NotImplementedError(
+                ("OVERWRITE_SUFFIX and OVERWRITE_VERSION are not supported "
+                 "at this moment"))
 
         if stream:
             stream.write("\n")

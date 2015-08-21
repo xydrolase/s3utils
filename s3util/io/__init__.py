@@ -2,6 +2,7 @@
 
 import time
 import sys
+import os
 
 import boto
 
@@ -48,11 +49,11 @@ class Connection:
 
         dirname = os.path.dirname(fname)
         if not os.path.exists(dirname):
-            os.mkdir(dirname)
+            os.makedirs(dirname)
 
         if os.path.exists(fname) and \
                 overwrite == OVERWRITE_SKIP:
-            return
+            return apply_hooks(_bucket.name, _key.name, fname, post_hooks)
 
         if not os.path.exists(fname) or \
                 overwrite == OVERWRITE_REPLACE:

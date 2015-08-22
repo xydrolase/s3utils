@@ -9,8 +9,9 @@ class CompressionHook(BaseHook):
     extension = None
     command = None
 
-    def __init__(self, keep=False, **kwargs):
+    def __init__(self, keep=False, overwrite=False, **kwargs):
         self.keep = keep
+        self.overwrite = overwrite
 
         super(CompressionHook, self).__init__(**kwargs)
 
@@ -24,17 +25,19 @@ class CompressionHook(BaseHook):
                 not self.keep)
 
     def __call__(self, bucket, key, fname):
-        _retval = self.dry_run(bucket, key, fname)
+        hkey, hfname, keep = _retval = self.dry_run(bucket, key, fname)
 
-        # use '-f' to force compression, unless gzip/bzip2 hangs waiting for
-        # user input.
+        if os.path.exists(hfname) and not self.overwrite:
+            return _retval
+
+        # use '-f' to force compression, otherwise gzip/bzip2 hangs waiting 
+        # for user input.
         args = [self.command, '-f'] + (['-k'] if self.keep else [])
         args.append(fname)
 
         subprocess.check_call(args)
 
         return _retval
-
 
 class GzipHook(CompressionHook):
     def __init__(self, **kwargs):

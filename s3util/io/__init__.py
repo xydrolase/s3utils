@@ -12,6 +12,12 @@ from s3util.hooks import load_hook, apply_hooks
 OVERWRITE_SKIP, OVERWRITE_REPLACE, OVERWRITE_SUFFIX, \
     OVERWRITE_VERSION = range(4)
 
+try:
+    _ = unicode
+except NameError:
+    # compat for Python 3
+    unicode = str
+
 class AuthenticationError(Exception):
     pass
 
@@ -23,8 +29,13 @@ class Connection:
 
     def get(self, bucket, key, abspath, overwrite=OVERWRITE_REPLACE,
             post_hooks=None, stream=sys.stdout):
-        if type(abspath) not in (file, str):
+
+        if type(abspath) is unicode:
+            abspath = str(abspath)
+
+        if type(abspath) not in (file, str, unicode):
             raise TypeError("invalid 'abspath' argument")
+
 
         if overwrite >= OVERWRITE_VERSION:
             raise ValueError(("invalid 'overwrite' argument: "

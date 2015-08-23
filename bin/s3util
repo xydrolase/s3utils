@@ -45,10 +45,9 @@ class DirPolicy:
         relpath = os.path.relpath(abspath, self.absroot)
 
         s3_path = relpath if self.use_relpath else fname
-        s3_key = os.path.join(self.prefix, s3_path)
-
         if self.flatten:
             s3_path = os.path.basename(s3_path)
+        s3_key = os.path.join(self.prefix, s3_path)
 
         return {
                 'abspath': abspath, 
@@ -169,7 +168,9 @@ def cmd_put(args):
                 "Invalid configuration file: `aws_credentials` missing.")
 
     if conf['aws_credentials'].get('use_iam_role', False):
-        conn = boto.connect_s3()
+        conn = s3util.io.Connection(
+            access_key_id=None,
+            secret_access_key=None)
     else:
         creds = conf['aws_credentials']
         try:

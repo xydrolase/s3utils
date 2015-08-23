@@ -68,8 +68,6 @@ class MetaHook(type):
         
 
 class BaseHook(six.with_metaclass(MetaHook)):
-    __metaclass__ = MetaHook
-
     re_regex = re.compile('^(~?)/([^/]+)/$')
     _filter = None
 

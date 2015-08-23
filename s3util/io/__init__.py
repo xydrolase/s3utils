@@ -33,7 +33,7 @@ class Connection:
         if type(abspath) is unicode:
             abspath = str(abspath)
 
-        if type(abspath) not in (file, str, unicode):
+        if type(abspath) not in (file, str):
             raise TypeError("invalid 'abspath' argument")
 
 
@@ -74,6 +74,10 @@ class Connection:
 
     def put(self, bucket, key, abspath, overwrite=OVERWRITE_REPLACE,
             pre_hooks=None, stream=sys.stdout, **kwargs):
+
+        if type(abspath) is unicode:
+            abspath = str(abspath)
+
         if type(abspath) not in (file, str):
             raise TypeError("invalid 'abspath' argument")
 

@@ -70,18 +70,26 @@ def parse_args(argv=None):
     sp_put = sub_parsers.add_parser("put", 
             help="Upload a local file to a S3 bucket.")
 
-    sp_put.add_argument("-b", "--bucket", 
-            help="Bucket to which the file is uploaded.")
-    sp_put.add_argument("-p", "--prefix", default='',
-            help="Directory (in the bucket) to which the file is uploaded.")
-    sp_put.add_argument("-o", "--overwrite", 
-            choices=["skip", "replace", "suffix", "versioning"],
-            default="replace",
-            help="How to deal with existing file(s).")
-    sp_put.add_argument("--flatten", action="store_true", default=False,
-            help="Discard the subdirectory structures for local files.")
-    sp_put.add_argument("files", nargs="+", metavar="file",
-            help="File(s) to be uploaded to S3.")
+    sp_put.add_argument(
+        "-b", "--bucket", 
+        help="Bucket to which the file is uploaded.")
+    sp_put.add_argument(
+        "-p", "--prefix", default='',
+        help="Directory (in the bucket) to which the file is uploaded.")
+    sp_put.add_argument(
+        "-o", "--overwrite", 
+        choices=["skip", "replace", "suffix", "versioning"],
+        default="replace",
+        help="How to deal with existing file(s).")
+    sp_put.add_argument(
+        "-A", "--abspath", default=False, action="store_true",
+        help="Use absolute path of local file to construct S3 file key.")
+    sp_put.add_argument(
+        "--flatten", action="store_true", default=False,
+        help="Discard the subdirectory structures for local files.")
+    sp_put.add_argument(
+        "files", nargs="+", metavar="file",
+        help="File(s) to be uploaded to S3.")
 
     sp_put.set_defaults(action=cmd_put)
 
@@ -97,6 +105,8 @@ def parse_args(argv=None):
 
     if hasattr(args, 'overwrite'):
         args.overwrite = OVERWRITE.get(args.overwrite, 1)
+
+    args.use_relpath = not args.abspath
 
     return args
 
@@ -137,7 +147,7 @@ def generate_s3_key(files, conf):
     if type(files) is str:
         files = [files]
 
-    dir_policies = [DirPolicy(root='/', **conf['default'])]
+    dir_policies = [DirPolicy(root='', **conf['default'])]
     for d in conf['directories']:
         if 'root' in d:
             pol = copy(conf['default'])
@@ -160,7 +170,7 @@ def cmd_put(args):
     # overwrite default settings with arguments specified by the user.
     conf['default'].update(dict(
         (attr, getattr(args, attr))
-        for attr in ['overwrite', 'prefix', 'bucket', 'flatten']
+        for attr in ['overwrite', 'prefix', 'bucket', 'flatten', 'use_relpath']
         if hasattr(args, attr) and getattr(args, attr)))
 
     if not 'aws_credentials' in conf:

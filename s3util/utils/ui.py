@@ -38,6 +38,10 @@ class ProgressBar:
         # used for averaging the last 5 ETAs for smoother estimates.
         self.etas = deque()
 
+    def reset(self):
+        # reset the timer
+        self.ts_start = time.time()
+
     def __call__(self, bytes_transmitted, bytes_total):
         perc = int(round(bytes_transmitted / bytes_total * 100))
         step = int(round(bytes_transmitted / bytes_total * self.steps))

@@ -163,13 +163,17 @@ class Connection:
         if not st_size:
             st_size = os.stat(abspath).st_size
 
-        mp = bucket.initiate_multipart_upload(abspath)
+        mp = bucket.initiate_multipart_upload(key.name)
         chunk_count = int(ceil(st_size / float(chunk_size)))
 
         for cidx in range(chunk_count):
             if stream:
                 stream.write("[{0}/{1}] Multipart uploading...\n".format(
-                    cidx+1, chunk_count)
+                    cidx+1, chunk_count))
+
+            # reset the callback progressbar's starting time to now.
+            if cb:
+                cb.reset()
 
             with FileChunkIO(
                     abspath, 'r', offset=chunk_size*cidx,
@@ -177,6 +181,8 @@ class Connection:
 
                 mp.upload_part_from_file(fp, part_num=cidx+1, cb=cb,
                                          num_cb=num_cb, replace=True)
+            if stream:
+                stream.write("\n")
 
         mp.complete_upload()
 

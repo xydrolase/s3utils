@@ -25,17 +25,26 @@ class DirPolicy:
         self.flatten = flatten
         self.overwrite = overwrite
 
+        # if root is empty, it implies that this policy applies to the current
+        # working directory.
+        self.is_cwd = not bool(root)
+
         self.absroot = os.path.abspath(root)
 
     def __contains__(self, fname):
         return os.path.abspath(fname).startswith(self.absroot)
 
     def __lt__(self, rhs):
-        return len(self.absroot) > len(rhs.absroot)
+        return self.is_cwd < rhs.is_cwd or \
+            len(self.absroot) > len(rhs.absroot)
 
     def __cmp__(self, rhs):
-        """Sort, in descending order, the depth of path (level of folders)."""
-        return -cmp(len(self.absroot), len(rhs.absroot))
+        """Sort, in descending order, the depth of path (level of folders).
+
+        Current working directory has the lowest priority.
+        """
+        return cmp(self.is_cwd, rhs.is_cwd) or \
+            -cmp(len(self.absroot), len(rhs.absroot))
 
     def __repr__(self):
         return "<DirPolicy '{0}'>".format(self.absroot)

@@ -6,6 +6,10 @@ import os
 
 import boto
 
+from math import ceil
+
+from filechunkio import FileChunkIO
+
 from s3util.utils.ui import ProgressBar
 from s3util.hooks import load_hook, apply_hooks
 
@@ -81,7 +85,8 @@ class Connection:
         if type(abspath) not in (file, str):
             raise TypeError("invalid 'abspath' argument")
 
-        fname = abspath if type(abspath) is str else abspath.name
+        fname = abspath if type(abspath) is str else\
+            os.path.abspath(abspath.name)
 
         try:
             _bucket = bucket if isinstance(bucket, boto.s3.bucket.Bucket) else \
@@ -113,7 +118,12 @@ class Connection:
 
     def _put(self, bucket, key, abspath, overwrite=OVERWRITE_REPLACE,
             stream=None, **kwargs):
-        fname = abspath if type(abspath) is str else abspath.name
+        fname = abspath if type(abspath) is str else \
+            os.path.abspath(abspath.name)
+
+        st_size = os.stat(fname).st_size
+        oversized = st_size > 5 * 1024 * 1024 * 1024
+
         func = 'set_contents_from_filename' if type(abspath) is str else \
                 'set_contents_from_file'
 
@@ -132,7 +142,11 @@ class Connection:
                         bucket.name, key.name))
             return
         elif not _exists or overwrite == OVERWRITE_REPLACE:
-            getattr(key, func)(abspath, replace=True, cb=_cb, num_cb=100)
+            if not oversized:
+                getattr(key, func)(abspath, replace=True, cb=_cb, num_cb=100)
+            else:
+                self._put_multipart(bucket, key, fname, cb=_cb, num_cb=100,
+                                    stream=stream, st_size=st_size)
         else:
             # TODO: needs implementation
             raise NotImplementedError(
@@ -142,6 +156,29 @@ class Connection:
         if stream:
             stream.write("\n")
             stream.flush()
+
+    def _put_multipart(self, bucket, key, abspath, cb=None, num_cb=100,
+                       stream=None, chunk_size=100*1024*1024, st_size=None):
+
+        if not st_size:
+            st_size = os.stat(abspath).st_size
+
+        mp = bucket.initiate_multipart_upload(abspath)
+        chunk_count = int(ceil(st_size / float(chunk_size)))
+
+        for cidx in range(chunk_count):
+            if stream:
+                stream.write("[{0}/{1}] Multipart uploading...\n".format(
+                    cidx+1, chunk_count)
+
+            with FileChunkIO(
+                    abspath, 'r', offset=chunk_size*cidx,
+                    bytes=min(chunk_size, st_size - chunk_size*cidx)) as fp:
+
+                mp.upload_part_from_file(fp, part_num=cidx+1, cb=cb,
+                                         num_cb=num_cb, replace=True)
+
+        mp.complete_upload()
 
     def __del__(self):
         self._conn.close()

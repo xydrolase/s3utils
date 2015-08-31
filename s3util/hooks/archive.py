@@ -47,7 +47,7 @@ class GzipHook(CompressionHook):
         super(GzipHook, self).__init__(**kwargs)
 
 class Bzip2Hook(CompressionHook):
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.extension = '.bz2'
         self.command = 'bzip2'
 

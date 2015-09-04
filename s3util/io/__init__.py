@@ -4,7 +4,7 @@ import time
 import sys
 import os
 
-import boto
+import boto.s3
 
 from math import ceil
 
@@ -26,10 +26,14 @@ class AuthenticationError(Exception):
     pass
 
 class Connection:
-    def __init__(self, access_key_id=None, secret_access_key=None):
-        self._conn = boto.connect_s3(
-                aws_access_key_id=access_key_id,
-                aws_secret_access_key=secret_access_key)
+    def __init__(self, region='us-east-1', use_iam_role=False,
+                 access_key_id=None, secret_access_key=None):
+
+        self._conn = boto.s3.connect_to_region(
+            region,
+            aws_access_key_id=None if use_iam_role else access_key_id,
+            aws_secret_access_key=None if use_iam_role else secret_access_key
+        )
 
     def get(self, bucket, key, abspath, overwrite=OVERWRITE_REPLACE,
             post_hooks=None, stream=sys.stdout):

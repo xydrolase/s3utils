@@ -16,8 +16,10 @@ import s3util.io
 OVERWRITE = dict(zip(['skip', 'replace', 'suffix', 'versioning'], range(4)))
 
 class DirPolicy:
-    def __init__(self, bucket='', root='', prefix='', use_relpath=True, 
-            flatten=False, overwrite='overwrite', **kwargs):
+    def __init__(self, region='us-east-1', bucket='', root='', prefix='', 
+                 use_relpath=True, flatten=False, overwrite='overwrite', 
+                 **kwargs):
+        self.region = region
         self.bucket = bucket
         self.root = root
         self.prefix = prefix
@@ -61,12 +63,15 @@ class DirPolicy:
         return {
                 'abspath': abspath, 
                 'relpath': relpath,
+                'region': self.region,
                 'bucket': self.bucket,
                 'overwrite': self.overwrite,
                 'key': s3_key
                 }
 
 def parse_args(argv=None):
+    avail_regions = boto.s3.regions()
+
     parser = ArgumentParser(
             description="Amazon S3 Utilities.")
     parser.add_argument("-c", "--config", default="~/.s3util/config.yaml",
@@ -79,6 +84,10 @@ def parse_args(argv=None):
     sp_put = sub_parsers.add_parser("put", 
             help="Upload a local file to a S3 bucket.")
 
+    sp_put.add_argument(
+        "-r", "--region", default="us-east-1", choices=avail_regions,
+        metavar="<aws_region>",
+        help="AWS Region of the target bucket.")
     sp_put.add_argument(
         "-b", "--bucket", 
         help="Bucket to which the file is uploaded.")
@@ -152,7 +161,7 @@ def load_config_file(conf_file):
         conf.setdefault('directories', [])
         return conf
 
-def generate_s3_key(files, conf):
+def generate_s3_key(files, conf, args):
     if type(files) is str:
         files = [files]
 
@@ -160,10 +169,12 @@ def generate_s3_key(files, conf):
     for d in conf['directories']:
         if 'root' in d:
             pol = copy(conf['default'])
+            # apply directory-specific policies
             pol.update(d)
+            # use user-specified arguments to overwrite directory policies
+            pol.update(args)
 
             dir_policies.append(DirPolicy(**pol))
-
 
     for f in files:
         # choose the most pertinent/narrow policy, if multiple policies are
@@ -176,46 +187,39 @@ def generate_s3_key(files, conf):
 def cmd_put(args):
     conf = load_config_file(args.config)
 
-    # overwrite default settings with arguments specified by the user.
-    conf['default'].update(dict(
+    args_overwrite = dict(
         (attr, getattr(args, attr))
-        for attr in ['overwrite', 'prefix', 'bucket', 'flatten', 'use_relpath']
-        if hasattr(args, attr) and getattr(args, attr)))
+        for attr in ['overwrite', 'prefix', 'bucket', 
+                     'flatten', 'use_relpath', 'region']
+        if hasattr(args, attr) and getattr(args, attr)
+    )
 
     if not 'aws_credentials' in conf:
         raise ValueError(
                 "Invalid configuration file: `aws_credentials` missing.")
 
-    if conf['aws_credentials'].get('use_iam_role', False):
-        conn = s3util.io.Connection(
-            access_key_id=None,
-            secret_access_key=None)
-    else:
-        creds = conf['aws_credentials']
-        try:
-            conn = s3util.io.Connection(
-                    access_key_id=creds.get('access_key_id', None),
-                    secret_access_key=creds.get('secret_access_key', None))
-        except boto.exception.NoAuthHandlerFound:
-            err_msg = ("fatal: You have not set up your credentials for "
-                    " authentication.\n\n"
-                    "Please set up the credentials via command: \n"
-                    "   s3util config credentials")
+    creds = {'use_iam_role': False,
+             'access_key_id': None,
+             'secret_access_key': None
+            }
 
-            print(err_msg, file=sys.stderr)
+    creds.update(conf['aws_credentials'])
 
+    conn, prev_reg = None, None
+    s3_keys = sorted(generate_s3_key(args.files, conf, args_overwrite),
+                  cmp=lambda x, y: cmp(x['region'], y['region']))
+
+    for key in s3_keys:
+        if not key['bucket'] or not key['region']:
+            print("fatal: region and bucket are required.", file=sys.stderr)
             sys.exit(1)
 
-    if not args.bucket:
-        def_conf = conf.get('default', {})
-        args.bucket = def_conf.get('bucket', None)
+        if key['region'] != prev_reg:
+            conn = s3util.io.Connection(key['region'], **creds)
 
-        if args.bucket is None:
-            print("fatal: bucket id is missing.", file=sys.stderr)
-            sys.exit(1)
+        conn.put(**key)
 
-    for f in generate_s3_key(args.files, conf):
-        conn.put(**f)
+        prev_reg = key['region']
 
     conn = None
 
